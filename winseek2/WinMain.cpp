@@ -18,6 +18,7 @@ IDirect3D9* pD3d = nullptr;
 IDirect3DDevice9* pDevice = nullptr;
 ID3DXFont* pFont = nullptr;
 ID3DXSprite* pSprite = nullptr;
+seekThermalCamera STC{};
 
 bool InitD3D(HWND hWnd, UINT uWidth, UINT uHeight)
 {
@@ -71,19 +72,16 @@ FILE* createConsole() {
 	std::cout.precision(2);
 	SMALL_RECT tmp = { 0, 0, 120, 15 };
 	SetConsoleWindowInfo(GetStdHandle(STD_OUTPUT_HANDLE), true, &tmp);
-	std::cout << "Init" << std::endl;
 	return f;
 }
 
 int WINAPI WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow )
 {
 	createConsole();
-
 	NativeWindow wnd;
-
 	wnd.Create( hInstance, nCmdShow );
 
-	initWinusb();
+	initWinusb(&STC);
 
 	if (!InitD3D( wnd.GetHandle(), WND_WIDTH, WND_HEIGHT ))
 		return 1;

@@ -3,59 +3,13 @@
 #include "setupapi.h"
 #include <tchar.h>
 #include "seekhandler.h"
-
-typedef PVOID WINUSB_INTERFACE_HANDLE, * PWINUSB_INTERFACE_HANDLE;
-typedef PVOID WINUSB_ISOCH_BUFFER_HANDLE, * PWINUSB_ISOCH_BUFFER_HANDLE;
-
-typedef struct _USB_INTERFACE_DESCRIPTOR {
-    UCHAR   bLength;
-    UCHAR   bDescriptorType;
-    UCHAR   bInterfaceNumber;
-    UCHAR   bAlternateSetting;
-    UCHAR   bNumEndpoints;
-    UCHAR   bInterfaceClass;
-    UCHAR   bInterfaceSubClass;
-    UCHAR   bInterfaceProtocol;
-    UCHAR   iInterface;
-} USB_INTERFACE_DESCRIPTOR, * PUSB_INTERFACE_DESCRIPTOR;
-
-typedef struct _WINUSB_SETUP_PACKET {
-    UCHAR   RequestType;
-    UCHAR   Request;
-    USHORT  Value;
-    USHORT  Index;
-    USHORT  Length;
-} WINUSB_SETUP_PACKET, * PWINUSB_SETUP_PACKET;
-
-typedef enum _USBD_PIPE_TYPE {
-    UsbdPipeTypeControl,
-    UsbdPipeTypeIsochronous,
-    UsbdPipeTypeBulk,
-    UsbdPipeTypeInterrupt
-} USBD_PIPE_TYPE;
-
-typedef struct _WINUSB_PIPE_INFORMATION {
-    USBD_PIPE_TYPE  PipeType;
-    UCHAR           PipeId;
-    USHORT          MaximumPacketSize;
-    UCHAR           Interval;
-} WINUSB_PIPE_INFORMATION, * PWINUSB_PIPE_INFORMATION;
-
-typedef struct _WINUSB_PIPE_INFORMATION_EX {
-    USBD_PIPE_TYPE PipeType;
-    UCHAR          PipeId;
-    USHORT         MaximumPacketSize;
-    UCHAR          Interval;
-    ULONG          MaximumBytesPerInterval;
-} WINUSB_PIPE_INFORMATION_EX, * PWINUSB_PIPE_INFORMATION_EX;
-
-typedef LONG USBD_STATUS;
-
-typedef struct _USBD_ISO_PACKET_DESCRIPTOR {
-    ULONG Offset;
-    ULONG Length;
-    USBD_STATUS Status;
-} USBD_ISO_PACKET_DESCRIPTOR, * PUSBD_ISO_PACKET_DESCRIPTOR;
+#include "strsafe.h"
+#include "winreg.h"
+#include "uuids.h"
+#include "setupApiFuncs.h"
+#include <sstream>
+#include "atlconv.h"
+#include "rpcdce.h"
 
 typedef bool(__stdcall* WinUsb_Initialize)(_In_  HANDLE DeviceHandle, _Out_ PWINUSB_INTERFACE_HANDLE InterfaceHandle);
 typedef bool(__stdcall* WinUsb_Free)(_In_  WINUSB_INTERFACE_HANDLE InterfaceHandle);
@@ -121,7 +75,7 @@ const char* vanityBool(bool i) {
     return i == 1 ? "True" : "False";
 }
 
-void initWinusb() {
+void initWinusb(seekThermalCamera* stc) {
 
 	HMODULE winusb = LoadLibraryA("winusb.dll");
     HMODULE setupapi = LoadLibraryA("setupapi.dll");
@@ -181,29 +135,105 @@ void initWinusb() {
     //std::cout << "SK_WinUsb_WriteIsochPipeAsap: " << std::hex << SK_WinUsb_WriteIsochPipeAsap << std::endl;
     //std::cout << "SK_WinUsb_ReadIsochPipeAsap: " << std::hex << SK_WinUsb_ReadIsochPipeAsap << std::endl;
 
-    std::cout << vanityBool(isSeekConnected()) << std::endl;
+    std::cout << vanityBool(connectSeek(stc)) << std::endl;
 }
 
-bool isSeekConnected() {
-    unsigned index;
-    HDEVINFO hDevInfo;
-    SP_DEVINFO_DATA DeviceInfoData;
-    TCHAR HardwareID[1024];
+void printGuid(GUID guid) {
+    printf("Guid = {%08lX-%04hX-%04hX-%02hhX%02hhX-%02hhX%02hhX%02hhX%02hhX%02hhX%02hhX}\n",
+        guid.Data1, guid.Data2, guid.Data3,
+        guid.Data4[0], guid.Data4[1], guid.Data4[2], guid.Data4[3],
+        guid.Data4[4], guid.Data4[5], guid.Data4[6], guid.Data4[7]);
+}
 
-    // List all connected USB devices
-    hDevInfo = SetupDiGetClassDevs(NULL, TEXT("USB"), NULL, DIGCF_PRESENT | DIGCF_ALLCLASSES);
-    for (index = 0; ; index++) {
-        DeviceInfoData.cbSize = sizeof(DeviceInfoData);
-        if (!SetupDiEnumDeviceInfo(hDevInfo, index, &DeviceInfoData)) {
-            return false;     // no match
-        }
+void Patch(BYTE* dst, BYTE* src, unsigned int size)
+{
+    DWORD oldprotect;
+    VirtualProtect(dst, size, PAGE_EXECUTE_READWRITE, &oldprotect);
+    memcpy(dst, src, size);
+    VirtualProtect(dst, size, oldprotect, &oldprotect);
+}
 
-        SetupDiGetDeviceRegistryProperty(hDevInfo, &DeviceInfoData, SPDRP_HARDWAREID, NULL, (BYTE*)HardwareID, sizeof(HardwareID), NULL);
+std::string ToNarrow(const wchar_t* s, char dfault = '?', const std::locale& loc = std::locale()){
+    std::ostringstream stm;
+    while (*s != L'\0') {  stm << std::use_facet< std::ctype<wchar_t> >(loc).narrow(*s++, dfault); }
+    return stm.str();
+}
 
-        if (_tcsstr(HardwareID, _T("VID_289D&PID_0010"))) {
-            return true;     // match
+GUID StringToGuid(const std::string& str)
+{
+    GUID guid;
+    sscanf_s(str.c_str(),
+        "{%8x-%4hx-%4hx-%2hhx%2hhx-%2hhx%2hhx%2hhx%2hhx%2hhx%2hhx}",
+        &guid.Data1, &guid.Data2, &guid.Data3,
+        &guid.Data4[0], &guid.Data4[1], &guid.Data4[2], &guid.Data4[3],
+        &guid.Data4[4], &guid.Data4[5], &guid.Data4[6], &guid.Data4[7]);
+
+    return guid;
+}
+
+std::string GuidToString(GUID guid)
+{
+    char guid_cstr[39];
+    snprintf(guid_cstr, sizeof(guid_cstr),
+        "{%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x}",
+        guid.Data1, guid.Data2, guid.Data3,
+        guid.Data4[0], guid.Data4[1], guid.Data4[2], guid.Data4[3],
+        guid.Data4[4], guid.Data4[5], guid.Data4[6], guid.Data4[7]);
+
+    return std::string(guid_cstr);
+}
+
+//i dont know what this is or how i made it
+//kill me please
+bool connectSeek(seekThermalCamera* destination) {
+    HDEVINFO devInfo = SetupDiGetClassDevsW(nullptr, nullptr, nullptr, DIGCF_ALLCLASSES | DIGCF_PRESENT);
+    HDEVINFO devInfo_adv = nullptr;
+    SP_DEVINFO_DATA devInfoData{};
+    _SP_DEVICE_INTERFACE_DATA devInterfaceData{};
+    USES_CONVERSION;
+
+    //couldnt have done this thing without SeekOFix, so thanks guys 
+    for (int di = 0; ; di++) {
+        bool success = false;
+        devInfoData.cbSize = sizeof(SP_DEVINFO_DATA);
+        success = SetupDiEnumDeviceInfo(devInfo, di, &devInfoData); //get current device
+        if (!success) { break; } //reached end of devices or something went fucky-wucky
+        HKEY hKey = SetupDiOpenDevRegKey(devInfo, &devInfoData, DICS_FLAG_GLOBAL, 0, DIREG_DEV, KEY_READ); //get reg key for the current device
+        DWORD outL = 0;
+        long output = RegGetValueW(hKey, nullptr, L"DeviceInterfaceGUIDs", RRF_RT_REG_SZ | RRF_RT_REG_MULTI_SZ, nullptr, nullptr, &outL); //get size of registry value of GUID
+        if (outL != 0) {
+            wchar_t* guid = new wchar_t[outL * 2]; //create wchar_t buffer for GUID
+            output = RegGetValueW(hKey, nullptr, L"DeviceInterfaceGUIDs", RRF_RT_REG_SZ | RRF_RT_REG_MULTI_SZ, nullptr, guid, &outL); //write GUID to buffer
+            std::string output = ToNarrow(guid); //convert it to std::string because the standard library is friendly
+            GUID convertedGuid = StringToGuid(output); //make it a GUID
+            
+            devInfo_adv = SetupDiGetClassDevsW(&convertedGuid, NULL, nullptr, DIGCF_DEVICEINTERFACE | DIGCF_PRESENT); //get the other kind of GUID we need for some reason
+            SP_DEVICE_INTERFACE_DATA interfaceData{}; 
+            interfaceData.cbSize = sizeof(SP_DEVICE_INTERFACE_DATA);
+
+            DEVICE_DATA finalDD; //final cool stuff goes here
+            for (int inf = 0; ; inf++) { //iterate over all interfaces on current device
+                success = SetupDiEnumDeviceInterfaces(devInfo_adv, nullptr, &convertedGuid, inf, &interfaceData); //get current interface
+                if (success) {
+                    std::cout << "Interface: " << inf << std::endl;
+                    SetupDiGetDeviceInterfaceDetailW(devInfo, &interfaceData, nullptr, 0, &outL, nullptr); //get data about interface
+                    RetrieveDevicePath(convertedGuid, (&finalDD)->DevicePath, sizeof((&finalDD)->DevicePath), nullptr); //get path
+                    std::string comp = ToNarrow(finalDD.DevicePath); //std::string is easy peasy
+                    if ((comp.find("0010") != std::string::npos) && (comp.find("289d") != std::string::npos)) {
+                        //seek device has been found
+                        std::cout << "found seek" << std::endl;
+                        finalDD.DeviceHandle = CreateFile(finalDD.DevicePath, GENERIC_WRITE | GENERIC_READ, FILE_SHARE_WRITE | FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, NULL); //get file handle
+                        if (SK_WinUsb_Initialize(finalDD.DeviceHandle, &(finalDD.WinusbHandle))) { //init using the sdk i made above
+                            destination->winUsbDeviceData = finalDD;
+                            return true;
+                        }
+                    }
+                }
+                else {
+                    break;
+                }
+            }   
         }
     }
+    return false;
 }
-
-
