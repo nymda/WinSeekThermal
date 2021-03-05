@@ -3,8 +3,8 @@
 #include <tchar.h>
 
 #define APPCLASS _T( "D3D9Test" )
-#define WND_WIDTH 800
-#define WND_HEIGHT 600
+#define WND_WIDTH 412
+#define WND_HEIGHT 312
 class NativeWindow
 {
 	HINSTANCE hInstance = nullptr;
