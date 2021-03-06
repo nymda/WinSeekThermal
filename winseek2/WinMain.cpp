@@ -14,6 +14,7 @@
 
 std::chrono::high_resolution_clock fpsTimer;
 float eTime = 0.f;
+float dTime = 0.f;
 char exTimeTxt[256]{ 0 };
 char title[64]{ 0 };
 WNDPROC oWndProc;
@@ -74,18 +75,24 @@ bool InitD3D(HWND hWnd, UINT uWidth, UINT uHeight)
 
 rawThermalFrameContainer rtfBuffer{};
 
+IDirect3DSurface9* surface;
+IDirect3DSurface9* surface_large;
+const RECT frameDrawingTemplate = { 0, 0, 206, 156 };
+D3DLOCKED_RECT drawCanvas;
+
 int len = 206;
 int hei = 156;
 int fMin = 12000;
 int fMax = 0;
 USHORT calibData[32448]{};
-
 USHORT drawFrameBuffer[32448];
+
 int lastAverage = 0;
 
 int totalCount = 0;
 int totalVal = 0;
 int averageVal = 1;
+LPDIRECT3DSURFACE9 backbuffer;
 
 void Render(NativeWindow& wnd)
 {
@@ -100,7 +107,6 @@ void Render(NativeWindow& wnd)
 	int tMin = 12000;
 	int tMax = 0;
 
-
 	UINT16 allowMin = 1000;
 	UINT16 allowMax = 12000;
 
@@ -108,75 +114,97 @@ void Render(NativeWindow& wnd)
 		byte brightness;
 	};
 
-	if (rtfBuffer.frameType == 0x03) {
+	bool displayCalibFrames = false;
+
+	if (rtfBuffer.frameType == 0x03 || displayCalibFrames) {
 		totalVal = 0;
 		totalCount = 0;
 		memcpy(drawFrameBuffer, rtfBuffer.convertedData, sizeof(drawFrameBuffer));		
 	}
-	else if (rtfBuffer.frameType == 0x01) {
+	if (rtfBuffer.frameType == 0x01) {
 		memcpy(calibData, rtfBuffer.convertedData, sizeof(calibData));
-		//memcpy(drawFrameBuffer, rtfBuffer.convertedData, sizeof(drawFrameBuffer));
 	}
+	
+	auto drawStartTime = fpsTimer.now();
 
+	surface->LockRect(&drawCanvas, &frameDrawingTemplate, D3DLOCK_DISCARD);
+	char* data = (char*)drawCanvas.pBits;
+
+	int customDeadPixel = 5451; //i have a dead pixel that shows incorrect but valid values here. CBA to properly fix it. 
+
+	int tOffset = 0;
 	int lastPx = 0;
 	for (int y = 0; y < hei; y++)
 	{
+		DWORD* row = (DWORD*)data;
 		for (int x = 0; x < len; x++)
 		{
 			pt++;
 			UINT16 currentPx = drawFrameBuffer[y * 208 + x];
-			currentPx = ((calibData[y * 208 + x]) * 1.25) - currentPx;
+			UINT16 intensityOffset = allowMax - calibData[y * 208 + x];
+			UINT16 calibratedPx = currentPx + intensityOffset;
 
-			int drawPosX = (x * 2);
-			int drawPosY = (y * 2);
+			if ((currentPx >= 1000 && currentPx <= 12000) && pt != customDeadPixel) {
+				if (calibratedPx < tMin) { tMin = calibratedPx; }
+				if (calibratedPx > tMax) { tMax = calibratedPx; }
 
-			if (currentPx >= 1000 && currentPx <= 12000) {
-				if (currentPx < tMin) { tMin = currentPx; }
-				if (currentPx > tMax) { tMax = currentPx; }
-
-				int vec = fMax - fMin;
+				int vec = ((fMax) - (fMin - 100)); 
 				if (vec <= 0) { vec = 1; }
-				int pix = (currentPx - fMin) * 255 / vec;
+				int pix = (calibratedPx - fMin) * 255 / vec;
 				if (pix > 254) { pix = 254; }
 				if (pix < 0) { pix = 0; }
 
 				if (vec <= 0) { vec = 1; }
 
-				D3DCOLOR tmp = (D3DCOLOR)(paletteLookup[(thermalPalette * 255) + pix]);
+				pix = 254 - pix;
+
 				lastPx = pix;
-				DrawFilledRect(drawPosX, drawPosY, 2, 2, tmp, pDevice);
+
+				*row++ = (D3DCOLOR)(paletteLookup[(thermalPalette * 255) + pix]);;
 
 				totalVal += pix;
 				totalCount++;
 
 			}
 			else {
-				D3DCOLOR tmp = (D3DCOLOR)(paletteLookup[(thermalPalette * 255) + lastPx]);
-				DrawFilledRect(drawPosX, drawPosY, 2, 2, tmp, pDevice);
+				*row++ = (D3DCOLOR)(paletteLookup[(thermalPalette * 255) + lastPx]);
+				//DrawFilledRect(drawPosX, drawPosY, 2, 2, tmp, pDevice);
 			}
 		}
+		data += drawCanvas.Pitch;
 	}
+	
+	surface->UnlockRect();
 
-	if (rtfBuffer.frameType != 0x03) {
-		DrawTextC("Calibrating...", 10, 27, 20, red, pDevice);
-	}
+	auto drawEndTime = fpsTimer.now();
 
 	if (totalCount != 0) {
 		averageVal = totalVal / totalCount;
-		std::cout << std::to_string(averageVal) << std::endl;
+		//std::cout << std::to_string(averageVal) << std::endl;
 	}
 
 
 	fMin = tMin;
 	fMax = tMax;
 
+	pDevice->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backbuffer);
+	pDevice->StretchRect(surface, NULL, backbuffer, NULL, D3DTEXF_POINT);
+
+	if (rtfBuffer.frameType != 0x03) {
+		DrawTextC("Calibrating...", 10, 27, 20, red, pDevice);
+	}
+
 	//END
 	DrawTextC(exTimeTxt, 10, 10, 17, green, pDevice);
+	//pDevice->Release();
 	pDevice->EndScene();
 	pDevice->Present( 0, 0, 0, 0 );
+
 	auto endTime = fpsTimer.now();
 	eTime = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime).count() / 1000.f; 
+	dTime = std::chrono::duration_cast<std::chrono::microseconds>(drawEndTime - drawStartTime).count() / 1000.f;
 	sprintf_s(exTimeTxt, 256, "FPS : %i", (int)(1000.f / eTime));
+	std::cout << "Frame took " << dTime << " MS" << std::endl;
 }
 
 FILE* createConsole() {
@@ -211,6 +239,8 @@ int WINAPI WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 
 	if (!InitD3D( wnd.GetHandle(), WND_WIDTH, WND_HEIGHT ))
 		return 1;
+
+	pDevice->CreateOffscreenPlainSurface(206, 156, D3DFMT_A8R8G8B8, D3DPOOL_DEFAULT, &surface, NULL);
 
 	MSG m;
 	while (true)
