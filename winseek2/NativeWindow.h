@@ -2,9 +2,9 @@
 #include <Windows.h>
 #include <tchar.h>
 
-#define APPCLASS _T( "D3D9Test" )
-#define WND_WIDTH 412
-#define WND_HEIGHT 312
+#define APPCLASS _T( "WinSeek" )
+#define WND_WIDTH 923
+#define WND_HEIGHT 493
 class NativeWindow
 {
 	HINSTANCE hInstance = nullptr;

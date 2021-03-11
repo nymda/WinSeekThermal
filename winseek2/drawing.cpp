@@ -2,7 +2,24 @@
 #include <vector>
 #include <iostream>
 
+void drawPolyFilledRect(vec2 p1, vec2 p2, vec2 p3, vec2 p4, D3DCOLOR color, IDirect3DDevice9* pDev) {
+	Vert tri1[4]{
+		{ p1.x, p1.y, 1.f, 0.f, color },
+		{ p2.x, p2.y, 1.f, 0.f, color },
+		{ p4.x, p4.y, 1.f, 0.f, color },
+		{ p1.x, p1.y, 1.f, 0.f, color }
+	};
 
+	Vert tri2[4]{
+		{ p1.x, p1.y, 1.f, 0.f, color },
+		{ p4.x, p4.y, 1.f, 0.f, color },
+		{ p3.x, p3.y, 1.f, 0.f, color },
+		{ p1.x, p1.y, 1.f, 0.f, color }
+	};
+
+	pDev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 3, tri1, sizeof(Vert));
+	pDev->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 3, tri2, sizeof(Vert));
+}
 
 void DrawFilledRect(int x, int y, int w, int h, D3DCOLOR color, IDirect3DDevice9* dev)
 {
@@ -25,13 +42,13 @@ void DrawLine(int x1, int y1, int x2, int y2, int thickness, D3DCOLOR color, IDi
 }
 
 //draws a skeletal circle using drawPrimitiveUP
-void drawCircleD3D(float x, float y, float radius, int sides, float width, D3DCOLOR color, LPDIRECT3DDEVICE9 pDevice)
+void drawCircleD3D(float x, float y, float radius, int sides, D3DCOLOR color, LPDIRECT3DDEVICE9 pDevice)
 {
 	float angle = D3DX_PI * 2 / sides;
 	float _cos = cos(angle);
 	float _sin = sin(angle);
 	float x1 = radius, y1 = 0, x2, y2;
-	Vert* cVerts = new Vert[(sides+1)];
+	Vert* cVerts = new Vert[(sides + 1)];
 
 	for (int i = 0; i < sides; i++)
 	{
@@ -45,10 +62,11 @@ void drawCircleD3D(float x, float y, float radius, int sides, float width, D3DCO
 	}
 	cVerts[sides] = cVerts[0];
 	pDevice->DrawPrimitiveUP(D3DPT_LINESTRIP, sides, cVerts, sizeof(Vert));
+	free(cVerts);
 }
 
 //draws a filled circle using drawPrimitiveUP
-void drawCircleFilledD3D(float x, float y, float radius, int sides, float width, D3DCOLOR color, LPDIRECT3DDEVICE9 pDevice)
+void drawCircleFilledD3D(float x, float y, float radius, int sides, D3DCOLOR color, LPDIRECT3DDEVICE9 pDevice)
 {
 	float angle = D3DX_PI * 2 / sides;
 	float _cos = cos(angle);
@@ -76,14 +94,15 @@ void drawCircleFilledD3D(float x, float y, float radius, int sides, float width,
 	cVerts[sides * 3] = cVerts[0];
 	cVerts[sides * 3 + 1] = cVerts[1];
 	pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, sides * 3, cVerts, sizeof(Vert));
+	free(cVerts);
 }
 
 
 bool initFonts = true;
 std::vector< ID3DXFont* > fonts = {};
-void DrawTextC(const char* text, float x, float y, int size, D3DCOLOR color, LPDIRECT3DDEVICE9 pDevice) {
+int DrawTextC(const char* text, float x, float y, int size, int alignment, D3DCOLOR color, LPDIRECT3DDEVICE9 pDevice) {
 	RECT rect;
-	size -= 1;
+	size -= 2;
 	if (size < 1) {
 		size = 1;
 	}
@@ -94,14 +113,14 @@ void DrawTextC(const char* text, float x, float y, int size, D3DCOLOR color, LPD
 	if (initFonts) {
 		for (int i = 0; i < 20; i++) {
 			ID3DXFont* tmpFont;
-			D3DXCreateFont(pDevice, i, 0, FW_NORMAL, 1, false, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Consolas", &tmpFont);
+			D3DXCreateFontW(pDevice, i, 0, FW_NORMAL, 1, false, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, PROOF_QUALITY, DEFAULT_PITCH | FF_MODERN, L"Lucida console", &tmpFont);
 			fonts.push_back(tmpFont);
 		}
 		initFonts = false;
 	}
 
 	SetRect(&rect, x, y, x, y);
-	fonts[size]->DrawTextA(NULL, text, -1, &rect, DT_LEFT | DT_NOCLIP, color);
+	return fonts[size]->DrawTextA(NULL, text, -1, &rect, alignment | DT_NOCLIP, color);
 }
 
 //draw triangle, clockwise notation
@@ -150,6 +169,6 @@ void drawDbgEspBox(vec2 position, LPDIRECT3DDEVICE9 pDevice) {
 	pDevice->DrawPrimitiveUP(D3DPT_LINESTRIP, 6, rectVerts, sizeof(Vert));
 	pDevice->DrawPrimitiveUP(D3DPT_LINESTRIP, 6, rectVertsOut, sizeof(Vert));
 	pDevice->DrawPrimitiveUP(D3DPT_LINESTRIP, 1, rectVertsHP, sizeof(Vert));
-	DrawTextC("HK", dbgTop.x + 102, dbgTop.y - 3, 15, white, pDevice);
-	DrawTextC("NAME", dbgTop.x - 1, dbgTop.y - 13, 15, white, pDevice);
+	DrawTextC("HK", dbgTop.x + 102, dbgTop.y - 3, 15, DT_LEFT, white, pDevice);
+	DrawTextC("NAME", dbgTop.x - 1, dbgTop.y - 13, 15, DT_LEFT, white, pDevice);
 }

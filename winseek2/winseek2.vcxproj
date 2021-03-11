@@ -142,6 +142,7 @@
     <ClInclude Include="NativeWindow.h" />
     <ClInclude Include="seekhandler.h" />
     <ClInclude Include="setupApiFuncs.h" />
+    <ClInclude Include="ui.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

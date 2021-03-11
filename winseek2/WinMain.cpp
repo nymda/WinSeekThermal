@@ -8,14 +8,21 @@
 #include "seekhandler.h"
 #include <string>
 #include <sstream>
+#include <vector>
+#include "ui.h"
+#include <thread>
+#include "Windows.h"
+#include <TlHelp32.h>
 
 #pragma comment(lib, "d3d9.lib")
 #pragma comment(lib, "d3dx9.lib")
 
+bool PROGRAM_IS_TERMINATING = false;
+
 std::chrono::high_resolution_clock fpsTimer;
 float eTime = 0.f;
 float dTime = 0.f;
-char exTimeTxt[256]{ 0 };
+char exTimeTxt[64]{ 0 };
 char title[64]{ 0 };
 WNDPROC oWndProc;
 
@@ -26,29 +33,27 @@ ID3DXSprite* pSprite = nullptr;
 seekThermalCamera STC{};
 int thermalPalette = 0;
 
+fennUi::externalHandler exhndlr;
+fennUi::universialWindow UWData;
+fennUi::keyHandler khndlr;
+fennUi::container backgroundItems;
+bool firstFrame = true;
+
 LRESULT APIENTRY hWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
+	khndlr.updateKey(uMsg, wParam, lParam);
 	switch (uMsg)
 	{
 	case WM_KEYDOWN:
 		if (wParam == VK_UP)
 		{
-			thermalPalette++;
+			//thermalPalette++;
 		}
 		if (wParam == VK_DOWN)
 		{
-			thermalPalette--;
+			//thermalPalette--;
 		}
-
-		if (thermalPalette < 0) {
-			thermalPalette = 0;
-		}
-		if (thermalPalette > 5) {
-			thermalPalette = 5;
-		}
-
-		sprintf_s(title, 64, "WinSeek | Palette %i", thermalPalette);
-		SetWindowTextA(hWnd, title);
+		//sprintf_s(title, 64, "WinSeek | Palette %i", thermalPalette);
 	}
 
 	return CallWindowProc(oWndProc, hWnd, uMsg, wParam, lParam);
@@ -78,34 +83,113 @@ rawThermalFrameContainer rtfBuffer{};
 IDirect3DSurface9* surface;
 IDirect3DSurface9* surface_large;
 const RECT frameDrawingTemplate = { 0, 0, 206, 156 };
+const RECT thermalWindow = { 25, 25, 618, 468 };
 D3DLOCKED_RECT drawCanvas;
 
 int len = 206;
-int hei = 156;
+int hei = 155;
 int fMin = 12000;
 int fMax = 0;
 USHORT calibData[32448]{};
-USHORT drawFrameBuffer[32448];
+USHORT thermFrameBuffer[32448];
+USHORT calibratedBuffer[32448];
 
 int lastAverage = 0;
-
 int totalCount = 0;
 int totalVal = 0;
 int averageVal = 1;
 LPDIRECT3DSURFACE9 backbuffer;
+coord badPixelMap[2048]{}; //if there are more than 2048 dead pixels then it will throw an access violation, but your camera is fucked soooo....
+int frameCount = 0;
+
+bool isInBounds(UINT16 val, UINT16 upper, UINT16 lower) {
+	if ((val > upper || val < lower)) {
+		return false;
+	}
+	return true;
+}
+
+int knownBadPixelNumber = 0;
+bool isKnownBadPixel(coord c) {
+	for (int i = 0; i < knownBadPixelNumber; i++) {
+		coord current = badPixelMap[i];
+		if (current.x == c.x && current.y == c.y) {
+			return true;
+		}
+	}
+	return false;
+}
+
+void threadRetrieveFrame() {
+	while (true) {
+		STC.getFrame(&rtfBuffer);
+		if (PROGRAM_IS_TERMINATING) {
+			return;
+		}
+	}
+}
+
+int tMin = 12000;
+int tMax = 0;
+bool autoCalibrate = true;
+
+bool setP1 = true;
+bool setP2 = false;
+bool setP3 = false;
+bool setP4 = false;
+
+std::vector<bool*> items = { &setP1, &setP2, &setP3, &setP4 };
 
 void Render(NativeWindow& wnd)
 {
+	if (firstFrame) {
+		UWData.init({ 643, 25 }, 1, &exhndlr, &khndlr, pDevice);
+		backgroundItems.init({ 0, 0 }, { 0, 0 }, 4, pDevice);
+		backgroundItems.addBasicLabel(title, { 0, 0 }, 20);
+		backgroundItems.addBasicLabel("Min:", { 0, 25 }, 20);
+		backgroundItems.addBasicLabel("Max:", { 0, 50 }, 20);
+		backgroundItems.addIntSlider({ 55, 25 }, 200, 1000, 12000, &tMin);
+		backgroundItems.addIntSlider({ 55, 50 }, 200, 1000, 12000, &tMax);
+		backgroundItems.addCheckbox("Auto calibrate", { 0, 75 }, 255, &autoCalibrate);
+
+		backgroundItems.addRadioButton("black-hot", { 0, 100 }, 125, &setP1, items);
+		backgroundItems.addRadioButton("white-hot", { 130, 100 }, 125, &setP2, items);
+		backgroundItems.addRadioButton("iron", { 0, 125 }, 125, &setP3, items);
+		backgroundItems.addRadioButton("rainbow", { 130, 125 }, 125, &setP4, items);
+
+		UWData.addContainer(&backgroundItems);
+		firstFrame = false;
+	}
+
+	exhndlr.update(wnd.GetHandle(), pDevice);
 	auto startTime = fpsTimer.now();
 	pDevice->BeginScene();
 	pDevice->Clear( 1, nullptr, D3DCLEAR_TARGET, 0x00111111, 1.0f, 0 );
 	//START
-	STC.getFrame(&rtfBuffer);
 
+
+	if (setP1) {
+		thermalPalette = 0;
+	}
+	else if (setP2) {
+		thermalPalette = 1;
+	}
+	else if (setP3) {
+		thermalPalette = 2;
+	}
+	else if (setP4) {
+		thermalPalette = 3;
+	}
+
+	sprintf_s(title, 64, "WinSeek | Palette %i", thermalPalette);
+
+#pragma region thermalFrameRendering
 	int pt = 0;
 
-	int tMin = 12000;
-	int tMax = 0;
+	if (autoCalibrate) {
+		tMin = 12000;
+		tMax = 0;
+	}
 
 	UINT16 allowMin = 1000;
 	UINT16 allowMax = 12000;
@@ -119,83 +203,125 @@ void Render(NativeWindow& wnd)
 	if (rtfBuffer.frameType == 0x03 || displayCalibFrames) {
 		totalVal = 0;
 		totalCount = 0;
-		memcpy(drawFrameBuffer, rtfBuffer.convertedData, sizeof(drawFrameBuffer));		
+		frameCount++;
+		memcpy(thermFrameBuffer, rtfBuffer.convertedData, sizeof(thermFrameBuffer));
 	}
 	if (rtfBuffer.frameType == 0x01) {
 		memcpy(calibData, rtfBuffer.convertedData, sizeof(calibData));
 	}
 	
 	auto drawStartTime = fpsTimer.now();
-
 	surface->LockRect(&drawCanvas, &frameDrawingTemplate, D3DLOCK_DISCARD);
 	char* data = (char*)drawCanvas.pBits;
+	UCHAR lastPx = 0;
 
-	int customDeadPixel = 5451; //i have a dead pixel that shows incorrect but valid values here. CBA to properly fix it. 
+	//calibrated based on shutter frames before doing anything else
+	for (int y = 0; y < hei; y++)
+	{
+		for (int x = 0; x < len; x++)
+		{
+			UINT16 calibValue = calibData[y * 208 + x];
+			UINT16 intensityOffset = allowMax - calibValue;
+			UINT16 currentPx = thermFrameBuffer[y * 208 + x];
+			UINT16 calibratedPx = currentPx + intensityOffset;
 
-	int tOffset = 0;
-	int lastPx = 0;
+			if ((calibratedPx >= 1000 && calibratedPx <= 12000)) {
+				calibratedBuffer[y * 208 + x] = calibratedPx;
+			}
+			else {
+				//invalid pixel
+				calibratedBuffer[y * 208 + x] = 0x0000;
+			}
+		}
+	}
+
+	//using calibrated data, correct bad pixels and draw it
+	UINT16 badPixelBound = 100;
+	bool cPixelIsBad = false;
+	bool skipAltBadPixDetection = false;
+	
 	for (int y = 0; y < hei; y++)
 	{
 		DWORD* row = (DWORD*)data;
 		for (int x = 0; x < len; x++)
 		{
-			pt++;
-			UINT16 currentPx = drawFrameBuffer[y * 208 + x];
-			UINT16 intensityOffset = allowMax - calibData[y * 208 + x];
-			UINT16 calibratedPx = currentPx + intensityOffset;
-
-			if ((currentPx >= 1000 && currentPx <= 12000) && pt != customDeadPixel) {
-				if (calibratedPx < tMin) { tMin = calibratedPx; }
-				if (calibratedPx > tMax) { tMax = calibratedPx; }
-
-				int vec = ((fMax) - (fMin - 100)); 
-				if (vec <= 0) { vec = 1; }
-				int pix = (calibratedPx - fMin) * 255 / vec;
-				if (pix > 254) { pix = 254; }
-				if (pix < 0) { pix = 0; }
-
-				if (vec <= 0) { vec = 1; }
-
-				pix = 254 - pix;
-
-				lastPx = pix;
-
-				*row++ = (D3DCOLOR)(paletteLookup[(thermalPalette * 255) + pix]);;
-
-				totalVal += pix;
-				totalCount++;
-
+			cPixelIsBad = false;
+			if (isKnownBadPixel({ x, y })) {
+				cPixelIsBad = true;
+				skipAltBadPixDetection = true;
 			}
 			else {
-				*row++ = (D3DCOLOR)(paletteLookup[(thermalPalette * 255) + lastPx]);
-				//DrawFilledRect(drawPosX, drawPosY, 2, 2, tmp, pDevice);
+				UINT16 calibratedPx = calibratedBuffer[y * 208 + x];
+				if (calibratedPx != 0x0000) {
+					if (x > 0 && x < len && y > 0 && y < len) {
+						coord thisLocation = { x, y };
+						coord upperLocation = { y - 1, x };
+						coord lowerLocation = { y + 1, x };
+						coord leftLocation = { y, x - 1 };
+						coord rightLocation = { y, x + 1 };
+
+						UINT16 upper = calibratedBuffer[(y + 1) * 208 + x];
+						UINT16 lower = calibratedBuffer[(y - 1) * 208 + x];
+						UINT16 left = calibratedBuffer[y * 208 + (x - 1)];
+						UINT16 right = calibratedBuffer[y * 208 + (x + 1)];
+						UINT16 avg_h = (right + left) / 2u;
+						UINT16 avg_v = (upper + lower) / 2u;
+
+						if (!isInBounds(calibratedPx, avg_h + badPixelBound, avg_h - badPixelBound) && !isInBounds(calibratedPx, avg_v + badPixelBound, avg_v - badPixelBound)) {
+							cPixelIsBad = true;
+						}
+					}
+
+					if (!cPixelIsBad) {
+						if (calibratedPx < 12000 && autoCalibrate) {
+							if (calibratedPx < tMin) { tMin = calibratedPx; }
+							if (calibratedPx > tMax) { tMax = calibratedPx; }
+						}
+
+						int vec = ((fMax)-(fMin - 100));
+						if (vec <= 0) { vec = 1; }
+						int pix = (calibratedPx - fMin) * 256 / vec;
+						if (pix > 256) { pix = 256; }
+						if (pix < 0) { pix = 0; }
+
+						*row++ = (paletteLookup[(thermalPalette * 256) + pix]);
+						lastPx = pix;
+					}
+				}
+				else {
+					cPixelIsBad = true;
+				}
+			}
+			
+			if (cPixelIsBad) {
+				if (!skipAltBadPixDetection) {
+					if (!isKnownBadPixel({ x, y }) && frameCount > 10) {
+						badPixelMap[knownBadPixelNumber] = { x, y };
+						knownBadPixelNumber++;
+						std::cout << "Added dead pixel: " << std::to_string(x) << ":" << std::to_string(y) << std::endl;
+					}
+				}
+
+				*row++ = (paletteLookup[(thermalPalette * 256) + lastPx]);
 			}
 		}
 		data += drawCanvas.Pitch;
 	}
-	
+
 	surface->UnlockRect();
 
 	auto drawEndTime = fpsTimer.now();
-
-	if (totalCount != 0) {
-		averageVal = totalVal / totalCount;
-		//std::cout << std::to_string(averageVal) << std::endl;
-	}
-
-
 	fMin = tMin;
 	fMax = tMax;
 
 	pDevice->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &backbuffer);
-	pDevice->StretchRect(surface, NULL, backbuffer, NULL, D3DTEXF_POINT);
+	pDevice->StretchRect(surface, NULL, backbuffer, &thermalWindow, D3DTEXF_POINT);
+#pragma endregion
 
-	if (rtfBuffer.frameType != 0x03) {
-		DrawTextC("Calibrating...", 10, 27, 20, red, pDevice);
-	}
+	UWData.draw();
+	fennUi::drawCursor(&exhndlr, pDevice);
 
 	//END
-	DrawTextC(exTimeTxt, 10, 10, 17, green, pDevice);
 	//pDevice->Release();
 	pDevice->EndScene();
 	pDevice->Present( 0, 0, 0, 0 );
@@ -203,8 +329,8 @@ void Render(NativeWindow& wnd)
 	auto endTime = fpsTimer.now();
 	eTime = std::chrono::duration_cast<std::chrono::microseconds>(endTime - startTime).count() / 1000.f; 
 	dTime = std::chrono::duration_cast<std::chrono::microseconds>(drawEndTime - drawStartTime).count() / 1000.f;
-	sprintf_s(exTimeTxt, 256, "FPS : %i", (int)(1000.f / eTime));
 	std::cout << "Frame took " << dTime << " MS" << std::endl;
+	//td::cout << "FPS " << 1000 / dTime << std::endl;
 }
 
 FILE* createConsole() {
@@ -231,9 +357,9 @@ int WINAPI WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 
 	oWndProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(wnd.GetHandle(), GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(hWndProc)));
 	sprintf_s(title, 64, "WinSeek | Palette %i", thermalPalette);
-	SetWindowTextA(wnd.GetHandle(), title);
 
 	initWinusb(&STC);
+	std::thread frameGetter(threadRetrieveFrame);
 
 	std::cout << "frame buffer: " << std::hex << &rtfBuffer.data << std::endl;
 
@@ -256,5 +382,7 @@ int WINAPI WinMain( HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		Render(wnd);
 	}
 
+	PROGRAM_IS_TERMINATING = true;
+	frameGetter.join();
 	return 0;
 }

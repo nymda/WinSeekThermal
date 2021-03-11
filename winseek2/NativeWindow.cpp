@@ -17,7 +17,7 @@ bool NativeWindow::Create( HINSTANCE hInstance, int nCmdShow )
 	// Create window
 	int x = GetSystemMetrics(SM_CXFULLSCREEN) / 4;
 	int y = 100;
-	hWnd = CreateWindowEx( 0, APPCLASS, APPCLASS, WS_OVERLAPPEDWINDOW | WS_VISIBLE, x, y, iWidth, iHeight, nullptr, nullptr, hInstance, nullptr );
+	hWnd = CreateWindowEx( 0, APPCLASS, APPCLASS, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX, x, y, iWidth, iHeight, nullptr, nullptr, hInstance, nullptr );
 
 	if (!hWnd)
 		return false;

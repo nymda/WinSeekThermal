@@ -27,12 +27,20 @@ static D3DCOLOR black = D3DCOLOR_ARGB(255, 0, 0, 0);
 
 void DrawFilledRect(int x, int y, int w, int h, D3DCOLOR color, IDirect3DDevice9* dev);
 
+/*
+1-----2
+o-----o
+o-----o
+3-----4*/
+void drawPolyFilledRect(vec2 p1, vec2 p2, vec2 p3, vec2 p4, D3DCOLOR color, IDirect3DDevice9* pDev);
+
 void DrawLine(int x1, int y1, int x2, int y2, int thickness, D3DCOLOR color, IDirect3DDevice9* dev);
 
-void DrawTextC(const char* text, float x, float y, int size, D3DCOLOR color, LPDIRECT3DDEVICE9 pDevice);
+int DrawTextC(const char* text, float x, float y, int size, int alignment, D3DCOLOR color, LPDIRECT3DDEVICE9 pDevice);
 
-void drawCircleD3D(float x, float y, float radius, int sides, float width, D3DCOLOR color, LPDIRECT3DDEVICE9 pDevice);
-void drawCircleFilledD3D(float x, float y, float radius, int sides, float width, D3DCOLOR color, LPDIRECT3DDEVICE9 pDevice);
+void drawCircleD3D(float x, float y, float radius, int sides, D3DCOLOR color, LPDIRECT3DDEVICE9 pDevice);
+
+void drawCircleFilledD3D(float x, float y, float radius, int sides, D3DCOLOR color, LPDIRECT3DDEVICE9 pDevice);
 
 void drawRect(vec2 start, int width, int height, D3DCOLOR color, LPDIRECT3DDEVICE9 pDevice);
 
