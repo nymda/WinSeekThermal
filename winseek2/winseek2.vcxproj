@@ -131,6 +131,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="bitmap.cpp" />
     <ClCompile Include="drawing.cpp" />
     <ClCompile Include="NativeWindow.cpp" />
     <ClCompile Include="seekhandler.cpp" />
@@ -138,6 +139,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\winusb.h" />
+    <ClInclude Include="bitmap.h" />
     <ClInclude Include="drawing.h" />
     <ClInclude Include="NativeWindow.h" />
     <ClInclude Include="seekhandler.h" />

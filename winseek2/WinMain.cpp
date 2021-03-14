@@ -13,6 +13,7 @@
 #include <thread>
 #include "Windows.h"
 #include <TlHelp32.h>
+#include "bitmap.h"
 
 #pragma comment(lib, "d3d9.lib")
 #pragma comment(lib, "d3dx9.lib")
@@ -87,12 +88,15 @@ const RECT thermalWindow = { 25, 25, 618, 468 };
 D3DLOCKED_RECT drawCanvas;
 
 int len = 206;
-int hei = 155;
+int hei = 156;
+//total pixel count = 32136
+
 int fMin = 12000;
 int fMax = 0;
 USHORT calibData[32448]{};
 USHORT thermFrameBuffer[32448];
 USHORT calibratedBuffer[32448];
+DWORD rgbBuffer[32136];
 
 int lastAverage = 0;
 int totalCount = 0;
@@ -139,7 +143,112 @@ bool setP3 = false;
 bool setP4 = false;
 
 std::vector<bool*> items = { &setP1, &setP2, &setP3, &setP4 };
+bool takeImage = false;
 
+int badPixelBound = 100;
+
+int smartGetAverage(int a = -1, int b = -1, int c = -1, int d = -1) {
+	int accum = 0;
+	int divC = 0;
+
+	if (a > -1) {
+		accum += a;
+		divC++;
+	}
+	if (b > -1) {
+		accum += b;
+		divC++;
+	}
+	if (c > -1) {
+		accum += c;
+		divC++;
+	}
+	if (d > -1) {
+		accum += d;
+		divC++;
+	}
+
+	if (divC <= 0) {
+		return 255;
+	}
+
+	return accum / divC;
+}
+
+bool validatePixel(UINT16 in) {
+	if (in > 2000 && in < 12000) {
+		return true;
+	}
+	return false;
+}
+
+UINT16 testSurroundingPixelAverage(int x, int y) {
+	UINT16 currentPx = calibratedBuffer[y * 208 + x];
+
+	if (x > 0 && x < len && y > 0 && y < hei) {
+		UINT16 upper = calibratedBuffer[(y + 1) * 208 + x];
+		UINT16 lower = calibratedBuffer[(y - 1) * 208 + x];
+		UINT16 left = calibratedBuffer[y * 208 + (x - 1)];
+		UINT16 right = calibratedBuffer[y * 208 + (x + 1)];
+
+		int a = -1;
+		int b = -1;
+		int c = -1;
+		int d = -1;
+
+		if (validatePixel(upper)) {
+			a = upper;
+		}
+		if (validatePixel(lower)) {
+			b = lower;
+		}
+		if (validatePixel(left)) {
+			c = left;
+		}
+		if (validatePixel(right)) {
+			d = right;
+		}
+
+		int avg = smartGetAverage(a, b, c, d);
+		if (!isInBounds(currentPx, avg + badPixelBound, avg - badPixelBound)) {
+			return avg;
+		}
+	}
+	return currentPx;
+}
+
+UINT16 getBadPixSurroundingAverage(int x, int y) {
+	if (x > 0 && x < len && y > 0 && y < hei) {
+		UINT16 upper = calibratedBuffer[(y + 1) * 208 + x];
+		UINT16 lower = calibratedBuffer[(y - 1) * 208 + x];
+		UINT16 left = calibratedBuffer[y * 208 + (x - 1)];
+		UINT16 right = calibratedBuffer[y * 208 + (x + 1)];
+
+		int a = -1;
+		int b = -1;
+		int c = -1;
+		int d = -1;
+
+		if (validatePixel(upper)) {
+			a = upper;
+		}
+		if (validatePixel(lower)) {
+			b = lower;
+		}
+		if (validatePixel(left)) {
+			c = left;
+		}
+		if (validatePixel(right)) {
+			d = right;
+		}
+
+		return smartGetAverage(a, b, c, d);
+	}
+	return 0;
+}
+
+fennUi::packagedText lastSavedFilename = {};
+std::string lastSavedFilenameStr = "";
 void Render(NativeWindow& wnd)
 {
 	if (firstFrame) {
@@ -156,6 +265,9 @@ void Render(NativeWindow& wnd)
 		backgroundItems.addRadioButton("white-hot", { 130, 100 }, 125, &setP2, items);
 		backgroundItems.addRadioButton("iron", { 0, 125 }, 125, &setP3, items);
 		backgroundItems.addRadioButton("rainbow", { 130, 125 }, 125, &setP4, items);
+
+		backgroundItems.addButton("Save image", { 0, 150 }, 255, fennUi::buttonMode::BMODE_SINGLE, &takeImage);
+		backgroundItems.addLabel(&lastSavedFilename, { 0, 175 }, 15);
 
 		UWData.addContainer(&backgroundItems);
 		firstFrame = false;
@@ -183,7 +295,7 @@ void Render(NativeWindow& wnd)
 
 	sprintf_s(title, 64, "WinSeek | Palette %i", thermalPalette);
 
-#pragma region thermalFrameRendering
+	#pragma region thermalFrameRendering
 	int pt = 0;
 
 	if (autoCalibrate) {
@@ -216,97 +328,179 @@ void Render(NativeWindow& wnd)
 	UCHAR lastPx = 0;
 
 	//calibrated based on shutter frames before doing anything else
-	for (int y = 0; y < hei; y++)
-	{
-		for (int x = 0; x < len; x++)
-		{
-			UINT16 calibValue = calibData[y * 208 + x];
-			UINT16 intensityOffset = allowMax - calibValue;
-			UINT16 currentPx = thermFrameBuffer[y * 208 + x];
-			UINT16 calibratedPx = currentPx + intensityOffset;
 
-			if ((calibratedPx >= 1000 && calibratedPx <= 12000)) {
-				calibratedBuffer[y * 208 + x] = calibratedPx;
-			}
-			else {
-				//invalid pixel
-				calibratedBuffer[y * 208 + x] = 0x0000;
-			}
-		}
-	}
-
-	//using calibrated data, correct bad pixels and draw it
-	UINT16 badPixelBound = 100;
-	bool cPixelIsBad = false;
-	bool skipAltBadPixDetection = false;
-	
-	for (int y = 0; y < hei; y++)
+	for (int y = 1; y < hei; y++)
 	{
 		DWORD* row = (DWORD*)data;
 		for (int x = 0; x < len; x++)
 		{
-			cPixelIsBad = false;
-			if (isKnownBadPixel({ x, y })) {
-				cPixelIsBad = true;
-				skipAltBadPixDetection = true;
+			bool validPix = true;
+
+			int thisPixelOffset = (y * 208 + x);
+			UINT16 calibValue = calibData[thisPixelOffset];
+			UINT16 currentPx = thermFrameBuffer[thisPixelOffset];
+
+			if (currentPx < 2000 || currentPx > 12000) { //dead pixel test stage one - check if uncalibrated pixel is out of range
+				validPix = false;
 			}
-			else {
-				UINT16 calibratedPx = calibratedBuffer[y * 208 + x];
-				if (calibratedPx != 0x0000) {
-					if (x > 0 && x < len && y > 0 && y < len) {
-						coord thisLocation = { x, y };
-						coord upperLocation = { y - 1, x };
-						coord lowerLocation = { y + 1, x };
-						coord leftLocation = { y, x - 1 };
-						coord rightLocation = { y, x + 1 };
+			UINT16 intensityOffset = allowMax - calibValue;
+			UINT16 calibratedPx = currentPx + intensityOffset;
+			calibratedBuffer[thisPixelOffset] = calibratedPx;
 
-						UINT16 upper = calibratedBuffer[(y + 1) * 208 + x];
-						UINT16 lower = calibratedBuffer[(y - 1) * 208 + x];
-						UINT16 left = calibratedBuffer[y * 208 + (x - 1)];
-						UINT16 right = calibratedBuffer[y * 208 + (x + 1)];
-						UINT16 avg_h = (right + left) / 2u;
-						UINT16 avg_v = (upper + lower) / 2u;
-
-						if (!isInBounds(calibratedPx, avg_h + badPixelBound, avg_h - badPixelBound) && !isInBounds(calibratedPx, avg_v + badPixelBound, avg_v - badPixelBound)) {
-							cPixelIsBad = true;
-						}
-					}
-
-					if (!cPixelIsBad) {
-						if (calibratedPx < 12000 && autoCalibrate) {
-							if (calibratedPx < tMin) { tMin = calibratedPx; }
-							if (calibratedPx > tMax) { tMax = calibratedPx; }
-						}
-
-						int vec = ((fMax)-(fMin - 100));
-						if (vec <= 0) { vec = 1; }
-						int pix = (calibratedPx - fMin) * 256 / vec;
-						if (pix > 256) { pix = 256; }
-						if (pix < 0) { pix = 0; }
-
-						*row++ = (paletteLookup[(thermalPalette * 256) + pix]);
-						lastPx = pix;
-					}
-				}
-				else {
-					cPixelIsBad = true;
-				}
-			}
-			
-			if (cPixelIsBad) {
-				if (!skipAltBadPixDetection) {
-					if (!isKnownBadPixel({ x, y }) && frameCount > 10) {
-						badPixelMap[knownBadPixelNumber] = { x, y };
-						knownBadPixelNumber++;
-						std::cout << "Added dead pixel: " << std::to_string(x) << ":" << std::to_string(y) << std::endl;
-					}
+			if (validPix) {
+				if (intensityOffset > 10000) {
+					validPix = false;
 				}
 
-				*row++ = (paletteLookup[(thermalPalette * 256) + lastPx]);
+				if (validPix) {
+
+					UINT16 VCalibPix = calibratedPx; // testSurroundingPixelAverage(x, y);
+					if (autoCalibrate) {
+						if (VCalibPix < tMin) { tMin = VCalibPix; }
+						if (VCalibPix > tMax) { tMax = VCalibPix; }
+					}
+
+
+					int vec = ((fMax)-(fMin - 100));
+					if (vec <= 0) { vec = 1; }
+					int pix = (VCalibPix - fMin) * 256 / vec;
+					if (pix > 256) { pix = 256; }
+					if (pix < 0) { pix = 0; }
+
+					lastPx = pix;
+					DWORD cPix = (paletteLookup[(thermalPalette * 256) + pix]);
+					*row++ = cPix;
+
+					continue;
+				}
 			}
+
+			if (!isKnownBadPixel({ x, y })) {
+				badPixelMap[knownBadPixelNumber] = { x, y };	
+				knownBadPixelNumber++;
+			}
+
+			UINT16 badPixelSurroundingAverage = getBadPixSurroundingAverage(x, y);
+
+			int vec = ((fMax)-(fMin - 100));
+			if (vec <= 0) { vec = 1; }
+			int pix = (badPixelSurroundingAverage - fMin) * 256 / vec;
+			if (pix > 256) { pix = 256; }
+			if (pix < 0) { pix = 0; }
+
+			DWORD cPix = (paletteLookup[(thermalPalette * 256) + pix]);
+			*row++ = cPix;
 		}
 		data += drawCanvas.Pitch;
 	}
+
+	//for (int y = 0; y < hei; y++)
+	//{
+	//	for (int x = 0; x < len; x++)
+	//	{
+	//		UINT16 calibValue = calibData[y * 208 + x];
+	//		UINT16 intensityOffset = allowMax - calibValue;
+	//		UINT16 currentPx = thermFrameBuffer[y * 208 + x];
+	//		UINT16 calibratedPx = currentPx + intensityOffset;
+
+	//		if ((calibratedPx >= 1000 && calibratedPx <= 12000)) {
+	//			calibratedBuffer[y * 208 + x] = calibratedPx;
+	//		}
+	//		else {
+	//			//invalid pixel
+	//			calibratedBuffer[y * 208 + x] = 0x0000;
+	//		}
+	//	}
+	//}
+
+	////using calibrated data, correct bad pixels and draw it
+	//UINT16 badPixelBound = 100;
+	//bool cPixelIsBad = false;
+	//bool skipAltBadPixDetection = false;
+	//int additor = 0;
+
+	//for (int y = 0; y < hei; y++)
+	//{
+	//	DWORD* row = (DWORD*)data;
+	//	for (int x = 0; x < len; x++)
+	//	{
+	//		cPixelIsBad = false;
+	//		if (isKnownBadPixel({ x, y })) {
+	//			cPixelIsBad = true;
+	//			skipAltBadPixDetection = true;
+	//		}
+	//		else {
+	//			skipAltBadPixDetection = false;
+	//			UINT16 calibratedPx = calibratedBuffer[y * 208 + x];
+	//			if (calibratedPx != 0x0000) {
+	//				if (x > 0 && x < len && y > 0 && y < len) {
+	//					coord thisLocation = { x, y };
+	//					coord upperLocation = { y - 1, x };
+	//					coord lowerLocation = { y + 1, x };
+	//					coord leftLocation = { y, x - 1 };
+	//					coord rightLocation = { y, x + 1 };
+
+	//					UINT16 upper = calibratedBuffer[(y + 1) * 208 + x];
+	//					UINT16 lower = calibratedBuffer[(y - 1) * 208 + x];
+	//					UINT16 left = calibratedBuffer[y * 208 + (x - 1)];
+	//					UINT16 right = calibratedBuffer[y * 208 + (x + 1)];
+	//					UINT16 avg_h = (right + left) / 2u;
+	//					UINT16 avg_v = (upper + lower) / 2u;
+
+	//					if (!isInBounds(calibratedPx, avg_h + badPixelBound, avg_h - badPixelBound) && !isInBounds(calibratedPx, avg_v + badPixelBound, avg_v - badPixelBound) && frameCount > 10) {
+	//						std::cout << "Added dead pixel (OOB): " << std::to_string(x) << ":" << std::to_string(y) << " AVG-V: " << std::to_string(avg_v) << " AVG-H: " << std::to_string(avg_h) << std::endl;
+	//						cPixelIsBad = true;
+	//					}
+	//				}
+
+	//				if (!cPixelIsBad) {
+	//					if (calibratedPx < 12000 && autoCalibrate) {
+	//						if (calibratedPx < tMin) { tMin = calibratedPx; }
+	//						if (calibratedPx > tMax) { tMax = calibratedPx; }
+	//					}
+
+	//					int vec = ((fMax)-(fMin - 100));
+	//					if (vec <= 0) { vec = 1; }
+	//					int pix = (calibratedPx - fMin) * 256 / vec;
+	//					if (pix > 256) { pix = 256; }
+	//					if (pix < 0) { pix = 0; }
+
+	//					DWORD cPix = (paletteLookup[(thermalPalette * 256) + pix]);
+	//					*row++ = cPix;
+	//					rgbBuffer[additor] = cPix;
+	//					additor++;
+	//					lastPx = pix;
+	//				}
+	//			}
+	//			else {
+	//				std::cout << "Added dead pixel (0x00): " << std::to_string(x) << ":" << std::to_string(y) << std::endl;
+	//				cPixelIsBad = true;
+	//			}
+	//		}
+	//		
+	//		if (cPixelIsBad) {
+	//			if (!skipAltBadPixDetection) {
+	//				if (!isKnownBadPixel({ x, y }) && frameCount > 10) {
+	//					std::cout << "Bad pixel stored" << std::endl;
+	//					badPixelMap[knownBadPixelNumber] = { x, y };
+	//					knownBadPixelNumber++;
+	//				}
+	//			}
+
+	//			DWORD cPix = (paletteLookup[(thermalPalette * 256) + lastPx]);
+	//			*row++ = cPix;
+	//			rgbBuffer[additor] = cPix;
+	//			additor++;
+
+	//		}
+	//	}
+	//	data += drawCanvas.Pitch;
+	//}
+	
+	if (takeImage) {
+		lastSavedFilenameStr = createThermalBitmap(rgbBuffer);
+	}
+	sprintf_s(lastSavedFilename.labelText, 128, lastSavedFilenameStr.c_str());
 
 	surface->UnlockRect();
 
